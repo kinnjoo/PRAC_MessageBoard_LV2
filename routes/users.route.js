@@ -1,8 +1,9 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { Users, UserInfos, sequelize } = require('../models');
+const { Users, UserInfos, UserHistories, sequelize } = require('../models');
 const router = express.Router();
 const { Transaction } = require('sequelize');
+const authMiddleware = require('../middlewares/auth-middleware.js');
 
 // 회원가입
 router.post('/users', async (req, res) => {
@@ -82,6 +83,51 @@ router.get('/users/:userId', async (req, res) => {
   });
 
   return res.status(200).json({ data: user });
+});
+
+// 사용자 이름 변경
+router.put('/users/name', authMiddleware, async (req, res) => {
+  const { name } = req.body; // 변경할 이름
+  const { userId } = res.locals.user;
+
+  const userInfo = await UserInfos.findOne({ where: { userId } });
+  const beforeName = userInfo.name;
+
+  // 트랜젝션으로 비즈니스 로직 수행
+  const transaction = await sequelize.transaction({
+    isolationLevel: Transaction.ISOLATION_LEVELS.READ_COMMITTED,
+  });
+
+  try {
+    // 사용자 정보 테이블에 있는 이름 변경
+    await UserInfos.update(
+      { name },
+      {
+        where: { userId },
+        transaction, // 트랜젝션을 통해서 쿼리를 수행
+      },
+    );
+
+    // 사용자의 변경된 이름 내역을 UserHistories 테이블에 삽입
+    await UserHistories.create(
+      {
+        UserId: userId,
+        beforeName,
+        afterName: name,
+      },
+      { transaction }, // 트랜젝션을 통해서 쿼리를 수행
+    );
+
+    await transaction.commit(); // 모든 비즈니스 로직이 성공하였다면 DB에 반영
+  } catch (transactionError) {
+    console.error(transactionError);
+    await transaction.rollback();
+    return res
+      .status(400)
+      .json({ errorMessage: '유저 이름 변경에 실패하였습니다.' });
+  }
+
+  return res.status(200).json({ message: '유저 이름 변경에 성공하였습니다.' });
 });
 
 module.exports = router;
